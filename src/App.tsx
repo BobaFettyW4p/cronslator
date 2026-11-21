@@ -23,6 +23,7 @@ const ERROR_TITLE: Record<string, string> = {
   rate_limited: "Slow down a little",
   bad_request: "Hmm, check that input",
   model_error: "That didn’t work",
+  over_capacity: "Daily limit reached",
 };
 
 export default function App() {
@@ -200,7 +201,7 @@ export default function App() {
 
 function ErrorCard({ error, onSuggestion }: { error: ApiError; onSuggestion: (cron: string) => void }) {
   const suggestions = error.error === "not_expressible" ? suggestedCrons(error.message) : [];
-  const tone = error.error === "not_expressible" || error.error === "rate_limited" ? "warn" : "error";
+  const tone = ["not_expressible", "rate_limited", "over_capacity"].includes(error.error) ? "warn" : "error";
   return (
     <section className={`card notice notice-${tone}`} role="status">
       <h2>{ERROR_TITLE[error.error] ?? "Something went wrong"}</h2>

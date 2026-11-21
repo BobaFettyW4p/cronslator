@@ -7,6 +7,11 @@ import { checkRateLimits, clientIp, durableLimiter, GLOBAL_LIMIT, IP_LIMIT } fro
 
 export { MAX_INPUT_LENGTH };
 
+function secondsUntilUtcMidnight(now = new Date()): number {
+  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(1, Math.ceil((midnight - now.getTime()) / 1000));
+}
+
 function json(body: ParseResponse | DescribeResponse | Record<string, unknown>, status = 200): Response {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
 }
@@ -58,6 +63,15 @@ export async function handleParse(request: Request, env: Env, ctx?: ExecutionCon
 
   if (!answer) {
     const result = await translate(env.AI as unknown as AiRunner, env.MODEL, input);
+    if (result.kind === "over_capacity") {
+      console.error("model over capacity", { error: result.error });
+      return fail(
+        "over_capacity",
+        "Cronslator has used up today's AI capacity. Questions others have already asked still work, and new ones will work again after 00:00 UTC.",
+        503,
+        { "retry-after": String(secondsUntilUtcMidnight()) },
+      );
+    }
     if (result.kind === "failed") {
       console.error("translate failed", { input, error: result.error, attempts: result.attempts });
       return fail("model_error", "Sorry, couldn't turn that into a cron expression. Try rephrasing it.", 502);

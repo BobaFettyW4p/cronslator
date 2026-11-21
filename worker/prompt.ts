@@ -22,7 +22,7 @@ Semantics you must respect:
 Defaults when the request is vague (always state them in "assumptions"):
 - No minute given → minute 0. "Every hour" → "0 * * * *".
 - "Morning" → 9:00, "noon" → 12:00, "evening" → 18:00, "night" → 21:00, "midnight" → 0:00.
-- "Business hours" → 9:00 to 16:59 on weekdays (hours 9-16), so a job never starts at or after 17:00.
+- "Business hours" → hours 9-16 AND days 1-5, even when weekdays aren't mentioned (business hours imply weekdays). Hours 9-16 means a job never starts at or after 17:00.
 - "Weekdays" → 1-5, "weekends" → 0,6.
 - "Daily" or "every day" with no time → midnight.
 - "Twice a day" → 0:00 and 12:00.

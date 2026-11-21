@@ -19,6 +19,7 @@ export type ErrorCode =
   | "rate_limited"
   | "not_expressible"
   | "model_error"
+  | "over_capacity"
   | "not_found"
   | "method_not_allowed";
 
