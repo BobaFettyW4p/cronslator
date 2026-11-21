@@ -18,6 +18,15 @@
 		"binding": "AI",
 		"remote": true
 	},
+	/**
+	 * Rate limits (per Cloudflare location, approximate by design).
+	 * IP_RATE_LIMITER: per client IP. GLOBAL_RATE_LIMITER: total model calls,
+	 * a cost ceiling even if requests come from many IPs.
+	 */
+	"ratelimits": [
+		{ "name": "IP_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+		{ "name": "GLOBAL_RATE_LIMITER", "namespace_id": "1002", "simple": { "limit": 200, "period": 60 } }
+	],
 	"vars": {
 		"MODEL": "@cf/openai/gpt-oss-120b"
 	}

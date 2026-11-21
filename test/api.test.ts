@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import worker from "../worker/index";
-import { answer, fakeAi, impossible } from "./fakeAi";
+import { answer, fakeAi, fakeLimiter, impossible } from "./fakeAi";
 
 function env(...responses: unknown[]) {
+  return envWith({}, ...responses);
+}
+
+function envWith(limits: { ip?: number; global?: number }, ...responses: unknown[]) {
   const { ai, calls } = fakeAi(...responses);
-  return { env: { AI: ai, MODEL: "@cf/test/model" } as unknown as Env, calls };
+  const ipLimiter = fakeLimiter(limits.ip);
+  const globalLimiter = fakeLimiter(limits.global);
+  const e = { AI: ai, MODEL: "@cf/test/model", IP_RATE_LIMITER: ipLimiter, GLOBAL_RATE_LIMITER: globalLimiter };
+  return { env: e as unknown as Env, calls, ipLimiter, globalLimiter };
 }
 
 const post = (body: unknown) =>
@@ -53,6 +60,37 @@ describe("POST /api/parse", () => {
     const res = await call(post({ text: "hmm" }), e);
     expect(res.status).toBe(502);
     expect(await res.json()).toMatchObject({ ok: false, error: "model_error" });
+  });
+
+  it("returns 429 with Retry-After when the IP limit is hit, without calling the model", async () => {
+    const { env: e, calls, ipLimiter } = envWith({ ip: 1 }, answer("0 * * * *"));
+    const withIp = () => {
+      const r = post({ text: "hourly" });
+      r.headers.set("cf-connecting-ip", "9.9.9.9");
+      return r;
+    };
+    expect((await call(withIp(), e)).status).toBe(200);
+    const res = await call(withIp(), e);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("60");
+    expect(await res.json()).toMatchObject({ ok: false, error: "rate_limited", message: expect.stringMatching(/fast/) });
+    expect(calls).toHaveLength(1);
+    expect(ipLimiter.keys).toEqual(["ip:9.9.9.9", "ip:9.9.9.9"]);
+  });
+
+  it("returns 429 when the global limit is hit", async () => {
+    const { env: e, calls } = envWith({ global: 0 });
+    const res = await call(post({ text: "hourly" }), e);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({ error: "rate_limited", message: expect.stringMatching(/busy/) });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not count invalid requests against the limit", async () => {
+    const { env: e, ipLimiter } = envWith({ ip: 1 });
+    await call(post({ text: "" }), e);
+    await call(post({ text: "daily", timezone: "Nope/Nope" }), e);
+    expect(ipLimiter.keys).toEqual([]);
   });
 
   it.each([

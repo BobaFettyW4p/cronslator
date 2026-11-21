@@ -21,3 +21,19 @@ export const answer = (cron: string, assumptions = "") => ({
 export const impossible = (reason: string) => ({
   response: { possible: false, cron: "", reason, assumptions: "" },
 });
+
+/** A fake Rate Limiting binding: allows `allow` calls per key, then denies. */
+export function fakeLimiter(allow = Infinity, opts: { throws?: boolean } = {}) {
+  const counts = new Map<string, number>();
+  const keys: string[] = [];
+  return {
+    keys,
+    async limit({ key }: { key: string }) {
+      if (opts.throws) throw new Error("limiter down");
+      keys.push(key);
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { success: n <= allow };
+    },
+  };
+}
