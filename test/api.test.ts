@@ -99,6 +99,15 @@ describe("POST /api/parse", () => {
     expect(limiterKeys).toEqual([]);
   });
 
+  it("returns 503 over_capacity with Retry-After when the AI quota is exhausted", async () => {
+    const { env: e, kv } = envWith({}, new Error("4006: you have used up your daily free allocation of 10,000 neurons"));
+    const res = await call(post({ text: "hourly" }), e);
+    expect(res.status).toBe(503);
+    expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(await res.json()).toMatchObject({ ok: false, error: "over_capacity", message: expect.stringMatching(/00:00 UTC/) });
+    expect(kv.puts).toHaveLength(0);
+  });
+
   it.each([
     ["not json", "{"],
     ["missing text", {}],

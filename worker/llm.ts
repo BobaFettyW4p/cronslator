@@ -9,7 +9,13 @@ export interface AiRunner {
 export type TranslateResult =
   | { kind: "ok"; cron: string; assumptions: string; attempts: number }
   | { kind: "not_expressible"; reason: string; attempts: number }
-  | { kind: "failed"; error: string; attempts: number };
+  | { kind: "failed"; error: string; attempts: number }
+  | { kind: "over_capacity"; error: string; attempts: number };
+
+/** Workers AI quota exhaustion (e.g. 4006 "daily free allocation of 10,000 neurons"); retrying can't help. */
+export function isQuotaError(message: string): boolean {
+  return /\b4006\b|daily free allocation|neurons/i.test(message);
+}
 
 const MAX_ATTEMPTS = 2;
 
@@ -63,6 +69,7 @@ export async function translate(ai: AiRunner, model: string, text: string): Prom
       answer = extractAnswer(raw);
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
+      if (isQuotaError(lastError)) return { kind: "over_capacity", error: lastError, attempts: attempt };
       continue;
     }
 

@@ -60,3 +60,14 @@ describe("translate", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("translate: quota exhaustion", () => {
+  it("returns over_capacity immediately without retrying", async () => {
+    const { ai, calls } = fakeAi(
+      new Error("4006: you have used up your daily free allocation of 10,000 neurons, please upgrade"),
+      answer("0 * * * *"),
+    );
+    expect(await translate(ai, "m", "hourly")).toMatchObject({ kind: "over_capacity", attempts: 1 });
+    expect(calls).toHaveLength(1);
+  });
+});
