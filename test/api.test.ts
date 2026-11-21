@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import worker from "../worker/index";
-import { answer, fakeAi, fakeLimiterNamespace, impossible } from "./fakeAi";
+import { answer, fakeAi, fakeCtx, fakeKv, fakeLimiterNamespace, impossible } from "./fakeAi";
 
 function env(...responses: unknown[]) {
   return envWith({}, ...responses);
 }
 
-function envWith(opts: { denyGlobal?: boolean }, ...responses: unknown[]) {
+function envWith(opts: { denyGlobal?: boolean; kv?: ReturnType<typeof fakeKv> }, ...responses: unknown[]) {
   const { ai, calls } = fakeAi(...responses);
   const limiter = fakeLimiterNamespace({ deny: (k) => !!opts.denyGlobal && k === "global" });
-  const e = { AI: ai, MODEL: "@cf/test/model", RATE_LIMITER: limiter.ns };
-  return { env: e as unknown as Env, calls, limiterKeys: limiter.keys };
+  const kv = opts.kv ?? fakeKv();
+  const e = { AI: ai, MODEL: "@cf/test/model", RATE_LIMITER: limiter.ns, CRON_CACHE: kv };
+  return { env: e as unknown as Env, calls, limiterKeys: limiter.keys, kv };
 }
 
 const post = (body: unknown) =>
@@ -20,8 +21,13 @@ const post = (body: unknown) =>
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 
-const call = (req: Request, e: Env) =>
-  worker.fetch(req as Parameters<typeof worker.fetch>[0], e);
+/** Calls the Worker and waits for any waitUntil work (e.g. cache writes) to settle. */
+async function call(req: Request, e: Env) {
+  const { ctx, pending } = fakeCtx();
+  const res = await worker.fetch(req as Parameters<typeof worker.fetch>[0], e, ctx as unknown as ExecutionContext);
+  await Promise.all(pending);
+  return res;
+}
 
 describe("POST /api/parse", () => {
   it("returns the cron plus code-computed details", async () => {
@@ -62,8 +68,7 @@ describe("POST /api/parse", () => {
   });
 
   it("allows 10 requests per minute per IP, then returns 429 with Retry-After", async () => {
-    const responses = Array.from({ length: 10 }, () => answer("0 * * * *"));
-    const { env: e, calls } = envWith({}, ...responses);
+    const { env: e, calls } = envWith({}, answer("0 * * * *"));
     const fromIp = (ip: string) => {
       const r = post({ text: "hourly" });
       r.headers.set("cf-connecting-ip", ip);
@@ -74,7 +79,8 @@ describe("POST /api/parse", () => {
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(await res.json()).toMatchObject({ ok: false, error: "rate_limited", message: expect.stringMatching(/fast/) });
-    expect(calls).toHaveLength(10);
+    // Identical questions: 1 model call, then cache hits, which still count toward the limit.
+    expect(calls).toHaveLength(1);
   });
 
   it("returns 429 when the global limit is hit", async () => {
@@ -111,6 +117,61 @@ describe("POST /api/parse", () => {
   it("rejects GET with 405", async () => {
     const { env: e } = env();
     expect((await call(new Request("https://x/api/parse"), e)).status).toBe(405);
+  });
+});
+
+describe("POST /api/parse caching", () => {
+  it("caches answers: a repeat (differently cased/spaced) question skips the model", async () => {
+    const { env: e, calls, kv } = envWith({}, answer("30 9 * * 1-5", "none"));
+    const first = await call(post({ text: "Every weekday at 9:30am" }), e);
+    expect(first.headers.get("x-cache")).toBe("MISS");
+    expect(kv.puts).toHaveLength(1);
+    expect(kv.puts[0].ttl).toBe(30 * 24 * 60 * 60);
+
+    const second = await call(post({ text: "  every   WEEKDAY at 9:30am. ", timezone: "Asia/Tokyo" }), e);
+    expect(second.headers.get("x-cache")).toBe("HIT");
+    expect(await second.json()).toMatchObject({
+      ok: true,
+      cron: "30 9 * * 1-5",
+      assumptions: "none",
+      timezone: "Asia/Tokyo", // run times are recomputed per request
+      input: "every WEEKDAY at 9:30am.",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("caches not-expressible answers too", async () => {
+    const { env: e, calls } = envWith({}, impossible("No."));
+    expect((await call(post({ text: "every 90 seconds" }), e)).status).toBe(422);
+    const again = await call(post({ text: "every 90 seconds" }), e);
+    expect(again.status).toBe(422);
+    expect(again.headers.get("x-cache")).toBe("HIT");
+    expect(await again.json()).toMatchObject({ error: "not_expressible", message: "No." });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not cache model failures", async () => {
+    const { env: e, kv } = envWith({}, answer("bad"), answer("worse"));
+    expect((await call(post({ text: "hmm" }), e)).status).toBe(502);
+    expect(kv.puts).toHaveLength(0);
+  });
+
+  it("ignores a cached cron that no longer validates", async () => {
+    const kv = fakeKv();
+    const seed = envWith({ kv }, answer("0 0 * * *"));
+    await call(post({ text: "daily" }), seed.env);
+    for (const k of kv.store.keys()) kv.store.set(k, JSON.stringify({ kind: "ok", cron: "0 0 L * *", assumptions: "" }));
+    const { env: e, calls } = envWith({ kv }, answer("0 0 * * *"));
+    const res = await call(post({ text: "daily" }), e);
+    expect(res.headers.get("x-cache")).toBe("MISS");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("still answers when KV reads and writes fail", async () => {
+    const { env: e } = envWith({ kv: fakeKv({ failReads: true, failWrites: true }) }, answer("0 * * * *"));
+    const res = await call(post({ text: "hourly" }), e);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-cache")).toBe("MISS");
   });
 });
 

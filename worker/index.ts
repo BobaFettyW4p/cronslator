@@ -1,4 +1,5 @@
 import { MAX_INPUT_LENGTH, type DescribeResponse, type ErrorCode, type ParseResponse } from "../shared/api";
+import { cacheKey, getCached, putCached, type CachedAnswer } from "./cache";
 import { enrich, isValidTimeZone, validateCron } from "./cron";
 import { translate, type AiRunner } from "./llm";
 import type { RateLimiter } from "../limiter/index";
@@ -16,7 +17,7 @@ function fail(error: ErrorCode, message: string, status: number, headers: Header
   return res;
 }
 
-export async function handleParse(request: Request, env: Env): Promise<Response> {
+export async function handleParse(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   let body: unknown;
   try {
     body = await request.json();
@@ -37,7 +38,8 @@ export async function handleParse(request: Request, env: Env): Promise<Response>
     return fail("bad_request", "Unknown timezone.", 400);
   }
 
-  // Rate limit only requests that would reach the model, so typos don't burn quota.
+  // Rate limit valid requests (cache hits included, so the cache can't be hammered either);
+  // invalid input never counts.
   const ns = env.RATE_LIMITER as DurableObjectNamespace<RateLimiter>;
   const limited = await checkRateLimits(durableLimiter(ns, IP_LIMIT), durableLimiter(ns, GLOBAL_LIMIT), clientIp(request));
   if (!limited.ok) {
@@ -48,24 +50,43 @@ export async function handleParse(request: Request, env: Env): Promise<Response>
     return fail("rate_limited", message, 429, { "retry-after": String(limited.retryAfterSeconds) });
   }
 
-  const result = await translate(env.AI as unknown as AiRunner, env.MODEL, input);
+  const key = await cacheKey(env.MODEL, input);
+  let answer = await getCached(env.CRON_CACHE, key);
+  // Re-check cached crons in case validation rules got stricter since they were stored.
+  if (answer?.kind === "ok" && !validateCron(answer.cron).ok) answer = null;
+  const cacheStatus = answer ? "HIT" : "MISS";
 
-  if (result.kind === "not_expressible") {
-    return fail("not_expressible", result.reason, 422);
+  if (!answer) {
+    const result = await translate(env.AI as unknown as AiRunner, env.MODEL, input);
+    if (result.kind === "failed") {
+      console.error("translate failed", { input, error: result.error, attempts: result.attempts });
+      return fail("model_error", "Sorry, couldn't turn that into a cron expression. Try rephrasing it.", 502);
+    }
+    const fresh: CachedAnswer =
+      result.kind === "ok"
+        ? { kind: "ok", cron: result.cron, assumptions: result.assumptions }
+        : { kind: "not_expressible", reason: result.reason };
+    answer = fresh;
+    const write = putCached(env.CRON_CACHE, key, fresh);
+    if (ctx) ctx.waitUntil(write);
+    else await write;
   }
-  if (result.kind === "failed") {
-    console.error("translate failed", { input, error: result.error, attempts: result.attempts });
-    return fail("model_error", "Sorry, couldn't turn that into a cron expression. Try rephrasing it.", 502);
+
+  const headers = { "x-cache": cacheStatus };
+  if (answer.kind === "not_expressible") {
+    return fail("not_expressible", answer.reason, 422, headers);
   }
 
   const ok: ParseResponse = {
     ok: true,
     input,
-    assumptions: result.assumptions,
+    assumptions: answer.assumptions,
     model: env.MODEL,
-    ...enrich(result.cron, tz),
+    ...enrich(answer.cron, tz),
   };
-  return json(ok);
+  const res = json(ok);
+  res.headers.set("x-cache", cacheStatus);
+  return res;
 }
 
 /** GET /api/describe?cron=...&tz=... : explain a cron without calling the model. */
@@ -79,7 +100,7 @@ export function handleDescribe(url: URL): Response {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/health") {
@@ -88,7 +109,7 @@ export default {
 
     if (url.pathname === "/api/parse") {
       if (request.method !== "POST") return fail("method_not_allowed", "Use POST.", 405);
-      return handleParse(request, env);
+      return handleParse(request, env, ctx);
     }
 
     if (url.pathname === "/api/describe") {
