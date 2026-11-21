@@ -25,6 +25,11 @@
 	"durable_objects": {
 		"bindings": [{ "name": "RATE_LIMITER", "class_name": "RateLimiter", "script_name": "cronslator-limiter" }]
 	},
+	/**
+	 * Cache of model answers, keyed by model + prompt fingerprint + normalized
+	 * question, so changing either automatically misses the old entries.
+	 */
+	"kv_namespaces": [{ "binding": "CRON_CACHE", "id": "bfcb1326ba6d4787b99e2ba433143786" }],
 	"vars": {
 		"MODEL": "@cf/openai/gpt-oss-120b"
 	}

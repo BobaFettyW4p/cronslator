@@ -60,3 +60,32 @@ export function fakeLimiterNamespace(opts: { deny?: (key: string) => boolean; no
   };
   return { ns, keys };
 }
+
+/** A fake KV namespace backed by a Map. */
+export function fakeKv(opts: { failReads?: boolean; failWrites?: boolean } = {}) {
+  const store = new Map<string, string>();
+  const puts: { key: string; value: string; ttl?: number }[] = [];
+  return {
+    store,
+    puts,
+    async get(key: string, _type: "json") {
+      if (opts.failReads) throw new Error("kv read down");
+      const v = store.get(key);
+      return v === undefined ? null : JSON.parse(v);
+    },
+    async put(key: string, value: string, o?: { expirationTtl?: number }) {
+      if (opts.failWrites) throw new Error("kv write down");
+      puts.push({ key, value, ttl: o?.expirationTtl });
+      store.set(key, value);
+    },
+  };
+}
+
+/** A fake ExecutionContext that records waitUntil promises so tests can await them. */
+export function fakeCtx() {
+  const pending: Promise<unknown>[] = [];
+  return {
+    pending,
+    ctx: { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException() {}, props: {} },
+  };
+}
