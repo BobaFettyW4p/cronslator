@@ -114,6 +114,41 @@ describe("POST /api/parse", () => {
   });
 });
 
+describe("GET /api/describe", () => {
+  const get = (qs: string) => call(new Request(`https://x/api/describe?${qs}`), env().env);
+
+  it("explains a valid cron without calling the model", async () => {
+    const { env: e, calls } = env();
+    const res = await call(new Request("https://x/api/describe?cron=30+9+*+*+1-5&tz=America/Chicago"), e);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      cron: "30 9 * * 1-5",
+      description: "At 09:30 AM, Monday through Friday",
+      timezone: "America/Chicago",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("defaults tz to UTC", async () => {
+    expect(await (await get("cron=0+0+*+*+*")).json()).toMatchObject({ timezone: "UTC" });
+  });
+
+  it.each([
+    ["missing cron", ""],
+    ["invalid cron", "cron=0+0+L+*+*"],
+    ["bad tz", "cron=0+0+*+*+*&tz=Mars/Olympus"],
+  ])("400s on %s", async (_n, qs) => {
+    const res = await get(qs);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ ok: false, error: "bad_request" });
+  });
+
+  it("rejects POST with 405", async () => {
+    expect((await call(new Request("https://x/api/describe", { method: "POST" }), env().env)).status).toBe(405);
+  });
+});
+
 describe("other routes", () => {
   it("serves /api/health", async () => {
     const { env: e } = env();

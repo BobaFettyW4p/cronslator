@@ -1,3 +1,4 @@
+import type { CronDetails, FieldName } from "../shared/api";
 import { CronExpressionParser } from "cron-parser";
 import cronstrue from "cronstrue";
 
@@ -8,8 +9,8 @@ import cronstrue from "cronstrue";
  * Actions, Cloudflare Cron Triggers, etc.
  */
 
-export const FIELD_NAMES = ["minute", "hour", "day of month", "month", "day of week"] as const;
-export type FieldName = (typeof FIELD_NAMES)[number];
+export type { CronDetails, FieldName };
+export const FIELD_NAMES: readonly FieldName[] = ["minute", "hour", "day of month", "month", "day of week"];
 
 const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 const DOW_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
@@ -157,14 +158,6 @@ export function warnings(cron: string): string[] {
   return out;
 }
 
-export interface CronDetails {
-  cron: string;
-  description: string;
-  fields: { field: FieldName; value: string }[];
-  nextRuns: string[];
-  timezone: string;
-  warnings: string[];
-}
 
 /** Assumes `cron` has already passed validateCron and `tz` passed isValidTimeZone. */
 export function enrich(cron: string, tz: string, from: Date = new Date()): CronDetails {
