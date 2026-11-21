@@ -90,8 +90,18 @@ jobs:
         if: env.HAS_TOKEN == 'true'
       - run: npm run build
         if: env.HAS_TOKEN == 'true'
-      - uses: cloudflare/wrangler-action@v3
+      # The limiter Worker hosts the RateLimiter Durable Object the app binds to,
+      # so it must be deployed first.
+      - name: Deploy rate limiter Worker
         if: env.HAS_TOKEN == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config dist/cronslator_limiter/wrangler.json
+      - name: Deploy app Worker
+        if: env.HAS_TOKEN == 'true'
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

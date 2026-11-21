@@ -1,0 +1,19 @@
+/**
+ * Private helper Worker that hosts the RateLimiter Durable Object.
+ * Kept separate from the main Worker because Cloudflare doesn't generate
+ * Version (preview) URLs for Workers that implement a Durable Object.
+ * Deployed by CI before the main Worker.
+ */
+{
+	"$schema": "../node_modules/wrangler/config-schema.json",
+	"name": "cronslator-limiter",
+	"main": "index.ts",
+	"compatibility_date": "2026-11-19",
+	"workers_dev": false,
+	"preview_urls": false,
+	"durable_objects": {
+		"bindings": [{ "name": "RATE_LIMITER", "class_name": "RateLimiter" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }],
+	"observability": { "enabled": true }
+}

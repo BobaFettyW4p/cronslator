@@ -19,14 +19,12 @@
 		"remote": true
 	},
 	/**
-	 * Rate limits (per Cloudflare location, approximate by design).
-	 * IP_RATE_LIMITER: per client IP. GLOBAL_RATE_LIMITER: total model calls,
-	 * a cost ceiling even if requests come from many IPs.
+	 * Exact rate limiting via a Durable Object hosted in the separate
+	 * cronslator-limiter Worker (see limiter/wrangler.jsonc).
 	 */
-	"ratelimits": [
-		{ "name": "IP_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
-		{ "name": "GLOBAL_RATE_LIMITER", "namespace_id": "1002", "simple": { "limit": 200, "period": 60 } }
-	],
+	"durable_objects": {
+		"bindings": [{ "name": "RATE_LIMITER", "class_name": "RateLimiter", "script_name": "cronslator-limiter" }]
+	},
 	"vars": {
 		"MODEL": "@cf/openai/gpt-oss-120b"
 	}
