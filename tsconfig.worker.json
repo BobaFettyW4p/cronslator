@@ -6,5 +6,5 @@
     "moduleResolution": "bundler",
     "types": ["./worker-configuration.d.ts", "vite/client"],
   },
-  "include": ["worker", "test"]
+  "include": ["worker", "limiter", "test"]
 }

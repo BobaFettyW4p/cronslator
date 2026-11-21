@@ -1,17 +1,16 @@
 import { describe, expect, it } from "vitest";
 import worker from "../worker/index";
-import { answer, fakeAi, fakeLimiter, impossible } from "./fakeAi";
+import { answer, fakeAi, fakeLimiterNamespace, impossible } from "./fakeAi";
 
 function env(...responses: unknown[]) {
   return envWith({}, ...responses);
 }
 
-function envWith(limits: { ip?: number; global?: number }, ...responses: unknown[]) {
+function envWith(opts: { denyGlobal?: boolean }, ...responses: unknown[]) {
   const { ai, calls } = fakeAi(...responses);
-  const ipLimiter = fakeLimiter(limits.ip);
-  const globalLimiter = fakeLimiter(limits.global);
-  const e = { AI: ai, MODEL: "@cf/test/model", IP_RATE_LIMITER: ipLimiter, GLOBAL_RATE_LIMITER: globalLimiter };
-  return { env: e as unknown as Env, calls, ipLimiter, globalLimiter };
+  const limiter = fakeLimiterNamespace({ deny: (k) => !!opts.denyGlobal && k === "global" });
+  const e = { AI: ai, MODEL: "@cf/test/model", RATE_LIMITER: limiter.ns };
+  return { env: e as unknown as Env, calls, limiterKeys: limiter.keys };
 }
 
 const post = (body: unknown) =>
@@ -62,35 +61,36 @@ describe("POST /api/parse", () => {
     expect(await res.json()).toMatchObject({ ok: false, error: "model_error" });
   });
 
-  it("returns 429 with Retry-After when the IP limit is hit, without calling the model", async () => {
-    const { env: e, calls, ipLimiter } = envWith({ ip: 1 }, answer("0 * * * *"));
-    const withIp = () => {
+  it("allows 10 requests per minute per IP, then returns 429 with Retry-After", async () => {
+    const responses = Array.from({ length: 10 }, () => answer("0 * * * *"));
+    const { env: e, calls } = envWith({}, ...responses);
+    const fromIp = (ip: string) => {
       const r = post({ text: "hourly" });
-      r.headers.set("cf-connecting-ip", "9.9.9.9");
+      r.headers.set("cf-connecting-ip", ip);
       return r;
     };
-    expect((await call(withIp(), e)).status).toBe(200);
-    const res = await call(withIp(), e);
+    for (let i = 0; i < 10; i++) expect((await call(fromIp("9.9.9.9"), e)).status).toBe(200);
+    const res = await call(fromIp("9.9.9.9"), e);
     expect(res.status).toBe(429);
-    expect(res.headers.get("retry-after")).toBe("60");
+    expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(await res.json()).toMatchObject({ ok: false, error: "rate_limited", message: expect.stringMatching(/fast/) });
-    expect(calls).toHaveLength(1);
-    expect(ipLimiter.keys).toEqual(["ip:9.9.9.9", "ip:9.9.9.9"]);
+    expect(calls).toHaveLength(10);
   });
 
   it("returns 429 when the global limit is hit", async () => {
-    const { env: e, calls } = envWith({ global: 0 });
+    const { env: e, calls } = envWith({ denyGlobal: true });
     const res = await call(post({ text: "hourly" }), e);
     expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("30");
     expect(await res.json()).toMatchObject({ error: "rate_limited", message: expect.stringMatching(/busy/) });
     expect(calls).toHaveLength(0);
   });
 
   it("does not count invalid requests against the limit", async () => {
-    const { env: e, ipLimiter } = envWith({ ip: 1 });
+    const { env: e, limiterKeys } = envWith({});
     await call(post({ text: "" }), e);
     await call(post({ text: "daily", timezone: "Nope/Nope" }), e);
-    expect(ipLimiter.keys).toEqual([]);
+    expect(limiterKeys).toEqual([]);
   });
 
   it.each([

@@ -1,6 +1,7 @@
 import { enrich, isValidTimeZone } from "./cron";
 import { translate, type AiRunner } from "./llm";
-import { checkRateLimits, clientIp } from "./rateLimit";
+import type { RateLimiter } from "../limiter/index";
+import { checkRateLimits, clientIp, durableLimiter, GLOBAL_LIMIT, IP_LIMIT } from "./rateLimit";
 
 export const MAX_INPUT_LENGTH = 200;
 
@@ -48,13 +49,14 @@ export async function handleParse(request: Request, env: Env): Promise<Response>
   }
 
   // Rate limit only requests that would reach the model, so typos don't burn quota.
-  const limited = await checkRateLimits(env.IP_RATE_LIMITER, env.GLOBAL_RATE_LIMITER, clientIp(request));
+  const ns = env.RATE_LIMITER as DurableObjectNamespace<RateLimiter>;
+  const limited = await checkRateLimits(durableLimiter(ns, IP_LIMIT), durableLimiter(ns, GLOBAL_LIMIT), clientIp(request));
   if (!limited.ok) {
     const message =
       limited.scope === "ip"
         ? "You're going a bit fast. Try again in a minute."
         : "Cronslator is busy right now. Try again in a minute.";
-    return fail("rate_limited", message, 429, { "retry-after": "60" });
+    return fail("rate_limited", message, 429, { "retry-after": String(limited.retryAfterSeconds) });
   }
 
   const result = await translate(env.AI as unknown as AiRunner, env.MODEL, input);
