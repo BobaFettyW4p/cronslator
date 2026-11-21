@@ -1,23 +1,12 @@
-import { enrich, isValidTimeZone } from "./cron";
+import { MAX_INPUT_LENGTH, type DescribeResponse, type ErrorCode, type ParseResponse } from "../shared/api";
+import { enrich, isValidTimeZone, validateCron } from "./cron";
 import { translate, type AiRunner } from "./llm";
 import type { RateLimiter } from "../limiter/index";
 import { checkRateLimits, clientIp, durableLimiter, GLOBAL_LIMIT, IP_LIMIT } from "./rateLimit";
 
-export const MAX_INPUT_LENGTH = 200;
+export { MAX_INPUT_LENGTH };
 
-export type ParseResponse =
-  | ({ ok: true; input: string; assumptions: string; model: string } & ReturnType<typeof enrich>)
-  | { ok: false; error: ErrorCode; message: string };
-
-export type ErrorCode =
-  | "bad_request"
-  | "rate_limited"
-  | "not_expressible"
-  | "model_error"
-  | "not_found"
-  | "method_not_allowed";
-
-function json(body: ParseResponse | Record<string, unknown>, status = 200): Response {
+function json(body: ParseResponse | DescribeResponse | Record<string, unknown>, status = 200): Response {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
 }
 
@@ -69,13 +58,24 @@ export async function handleParse(request: Request, env: Env): Promise<Response>
     return fail("model_error", "Sorry, couldn't turn that into a cron expression. Try rephrasing it.", 502);
   }
 
-  return json({
+  const ok: ParseResponse = {
     ok: true,
     input,
     assumptions: result.assumptions,
     model: env.MODEL,
     ...enrich(result.cron, tz),
-  });
+  };
+  return json(ok);
+}
+
+/** GET /api/describe?cron=...&tz=... : explain a cron without calling the model. */
+export function handleDescribe(url: URL): Response {
+  const v = validateCron(url.searchParams.get("cron") ?? "");
+  if (!v.ok) return fail("bad_request", v.error, 400);
+  const tz = url.searchParams.get("tz") || "UTC";
+  if (!isValidTimeZone(tz)) return fail("bad_request", "Unknown timezone.", 400);
+  const body: DescribeResponse = { ok: true, ...enrich(v.cron, tz) };
+  return json(body);
 }
 
 export default {
@@ -89,6 +89,11 @@ export default {
     if (url.pathname === "/api/parse") {
       if (request.method !== "POST") return fail("method_not_allowed", "Use POST.", 405);
       return handleParse(request, env);
+    }
+
+    if (url.pathname === "/api/describe") {
+      if (request.method !== "GET") return fail("method_not_allowed", "Use GET.", 405);
+      return handleDescribe(url);
     }
 
     if (url.pathname.startsWith("/api/")) {
